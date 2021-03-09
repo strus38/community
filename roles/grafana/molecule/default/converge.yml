@@ -1,6 +1,7 @@
 ---
 - name: Converge
   hosts: all
+  any_errors_fatal: true
   vars:
     start_services: true
     enable_services: false

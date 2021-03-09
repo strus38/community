@@ -19,31 +19,93 @@
         - "vars/{{ ansible_facts.os_family }}.yml"
       skip: true
   tags:
-    - firewall
-    - internal
-    - package
-    - service
+    - grafana_service
+    - grafana_firewall
+    - grafana_install
+    - grafana_configure
+    - grafana_datasources
+    - grafana_notifications
+    - grafana_dashboards
 
-- name: "firewalld █ Add services to firewall's {{ grafana_firewall_zone | default('public') }} zone"
-  firewalld:
-    zone: "{{ grafana_firewall_zone | default('public') }}"
-    service: "{{ item }}"
-    immediate: "yes"
-    permanent: "yes"
-    state: enabled
-  when:
-    - ansible_facts.os_family == "RedHat"
-    - ep_firewall | default(false) | bool
-  loop: "{{ grafana_firewall_services_to_add }}"
+- include_tasks: preflight.yml
   tags:
-    - firewall
+    - grafana_service
+    - grafana_firewall
+    - grafana_install
+    - grafana_configure
+    - grafana_datasources
+    - grafana_notifications
+    - grafana_dashboards
 
-- name: "package █ Install {{ grafana_packages_to_install | join(' ') }} packages"
-  package:
-    name: "{{ grafana_packages_to_install }}"
-    state: present
+- include_tasks: install.yml
   tags:
-    - package
+    - grafana_service
+    - grafana_firewall
+    - grafana_install
+    - grafana_configure
+
+- include_tasks: configure.yml
+  tags:
+    - grafana_configure
+
+- include_tasks: plugins.yml
+  when: grafana_plugins != []
+  tags:
+    - grafana_configure
+
+- name: service █ Wait for grafana to start (http/s)
+  wait_for:
+    host: "{{ grafana_address }}"
+    port: "{{ grafana_port }}"
+  when: grafana_server.protocol is undefined or grafana_server.protocol in ['http', 'https']
+  tags:
+    - grafana_install
+    - grafana_configure
+    - grafana_datasources
+    - grafana_notifications
+    - grafana_dashboards
+    - grafana_run
+
+- name: service █ Wait for grafana to start (socket)
+  wait_for:
+    path: "{{ grafana_server.socket }}"
+  when: grafana_server.protocol is defined and grafana_server.protocol == 'socket'
+  tags:
+    - grafana_install
+    - grafana_configure
+    - grafana_datasources
+    - grafana_notifications
+    - grafana_dashboards
+    - grafana_run
+
+- include_tasks: api_keys.yml
+  when: grafana_api_keys | length > 0
+  tags:
+    - grafana_configure
+    - grafana_run
+
+- include_tasks: datasources.yml
+  when: grafana_datasources != []
+  tags:
+    - grafana_configure
+    - grafana_datasources
+    - grafana_run
+
+- name: "grafana █ Check if there are any dashboards in local {{ grafana_dashboards_dir }}"
+  become: false
+  set_fact:
+    found_dashboards: "{{ lookup('fileglob', grafana_dashboards_dir + '/*.json', wantlist=True) }}"
+  tags:
+    - grafana_configure
+    - grafana_dashboards
+    - grafana_run
+
+- include_tasks: dashboards.yml
+  when: grafana_dashboards | length > 0 or found_dashboards | length > 0
+  tags:
+    - grafana_configure
+    - grafana_dashboards
+    - grafana_run
 
 - name: "service █ Manage {{ grafana_services_to_start | join(' ') }} services state"
   service:
@@ -52,4 +114,14 @@
     state: "{{ (start_services | bool) | ternary('started', omit) }}"
   loop: "{{ grafana_services_to_start }}"
   tags:
-    - service
+    - grafana_service
+
+- name: grafana █ UI login information
+  debug:
+    msg:
+      - '###############################################################'
+      - 'Grafana is accessible now:'
+      - "URL: {{ grafana_address }}:{{ grafana_port }}"
+      - "- login: {{ grafana_security.admin_user }}"
+      - "- password: {{ grafana_security.admin_password }}"
+      - '###############################################################'
